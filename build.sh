@@ -1,35 +1,50 @@
 #!/bin/bash
-# WOFES OS — автоматическая сборка ISO
-
 set -e
 
-echo "=== Установка инструментов ==="
-sudo apt update
-sudo apt install -y debootstrap squashfs-tools xorriso isolinux
+ROOT_PASS="root"
 
-echo "=== Создание корневой ФС ==="
-sudo debootstrap stable ./rootfs http://deb.debian.org/debian
+apt update
+apt install -y debootstrap squashfs-tools xorriso isolinux grub-pc-bin grub-efi-amd64-bin
 
-echo "=== Настройка системы ==="
-sudo chroot rootfs apt install --no-install-recommends -y linux-image-amd64 firefox-esr
-echo "root:root" | sudo chroot rootfs chpasswd
+debootstrap --variant=minbase stable ./rootfs http://deb.debian.org/debian
 
-echo "=== Подготовка ISO ==="
-sudo mkdir -p iso/boot/grub
-sudo cp rootfs/boot/vmlinuz-* iso/boot/kernel
-sudo cp rootfs/boot/initrd.img-* iso/boot/initrd
+chroot rootfs apt install --no-install-recommends -y \
+    linux-image-amd64 \
+    live-boot \
+    live-boot-initramfs-tools \
+    locales \
+    firefox-esr
 
-sudo cat > iso/boot/grub/grub.cfg << EOF
+echo "root:${ROOT_PASS}" | chroot rootfs chpasswd
+
+chroot rootfs apt-get clean
+chroot rootfs rm -rf /var/lib/apt/lists/*
+
+mkdir -p iso/boot/grub
+
+# Проверка что ядро найдено
+KERNEL=$(ls rootfs/boot/vmlinuz-* 2>/dev/null | tail -1)
+INITRD=$(ls rootfs/boot/initrd.img-* 2>/dev/null | tail -1)
+
+if [ -z "$KERNEL" ] || [ -z "$INITRD" ]; then
+    echo "Ошибка: ядро или initrd не найдены в rootfs/boot/"
+    exit 1
+fi
+
+cp "$KERNEL" iso/boot/kernel
+cp "$INITRD" iso/boot/initrd
+
+tee iso/boot/grub/grub.cfg << EOF
 set timeout=5
 set default=0
+
 menuentry "WOFES OS" {
-    linux /boot/kernel root=/dev/sda1
+    linux /boot/kernel boot=live live-media-path=/boot quiet splash
     initrd /boot/initrd
 }
 EOF
 
-sudo mksquashfs rootfs iso/filesystem.squashfs -comp xz
-sudo grub-mkrescue -o wofes-os.iso iso
+mksquashfs rootfs iso/filesystem.squashfs -comp xz -noappend
+grub-mkrescue -o wofes-os.iso iso
 
-echo "=== Готово ==="
-echo "ISO: wofes-os.iso"
+echo "Готово: wofes-os.iso"
